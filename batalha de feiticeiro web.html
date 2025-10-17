@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Batalha de Feiticeiros</title>
+  <style>
+    :root{--bg:#0b1020;--card:#0f1724;--accent:#7c3aed;--muted:#94a3b8;}
+    *{box-sizing:border-box;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial}
+    body{margin:0;min-height:100vh;background:linear-gradient(180deg,#041024 0%, #071832 100%);color:#e6eef8;display:flex;align-items:center;justify-content:center;padding:24px}
+    .container{width:100%;max-width:980px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:12px;padding:18px;box-shadow:0 8px 30px rgba(2,6,23,0.7)}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+    h1{font-size:20px;margin:0}
+    .board{display:grid;grid-template-columns:1fr 380px;gap:14px}
+    .arena{background:rgba(255,255,255,0.02);border-radius:10px;padding:14px;min-height:360px;position:relative;overflow:hidden}
+    canvas{width:100%;height:360px;display:block}
+    .sidebar{background:var(--card);padding:12px;border-radius:10px;min-height:360px}
+    .wizard-card{background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.015));padding:10px;border-radius:8px;margin-bottom:10px}
+    .name{font-weight:600}
+    .hpbar{height:10px;background:rgba(255,255,255,0.06);border-radius:6px;overflow:hidden;margin-top:6px}
+    .hpfill{height:100%;background:linear-gradient(90deg,#ef4444,#f97316)}
+    .manabar{height:8px;background:rgba(255,255,255,0.03);border-radius:6px;overflow:hidden;margin-top:6px}
+    .manafill{height:100%;background:linear-gradient(90deg,#60a5fa,#7c3aed)}
+    .actions{display:flex;gap:8px;flex-wrap:wrap}
+    button{background:var(--accent);border:none;padding:8px 10px;border-radius:8px;color:white;font-weight:600;cursor:pointer}
+    button.secondary{background:transparent;border:1px solid rgba(255,255,255,0.06)}
+    .log{background:rgba(0,0,0,0.2);padding:8px;border-radius:8px;height:160px;overflow:auto;font-size:13px;color:var(--muted)}
+    .small{font-size:13px;color:var(--muted)}
+    .footer{display:flex;justify-content:space-between;align-items:center;margin-top:10px}
+    .cooldown{opacity:0.8;font-size:12px}
+    @media (max-width:900px){.board{grid-template-columns:1fr;}.sidebar{order:2}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Batalha de Feiticeiros — versão web (JavaScript)</h1>
+      <div class="small">Turno: <span id="turnNumber">1</span> • Jogador: <strong id="currentPlayer">Você</strong></div>
+    </header>
+
+    <div class="board">
+      <section class="arena">
+        <canvas id="stage" width="800" height="360"></canvas>
+      </section>
+
+      <aside class="sidebar">
+        <div class="wizard-card" id="playerCard">
+          <div class="name">Você — Arcano</div>
+          <div class="small">Vida: <span id="playerHPText">100</span>/100</div>
+          <div class="hpbar"><div id="playerHP" class="hpfill" style="width:100%"></div></div>
+          <div class="small">Mana: <span id="playerMPText">50</span>/50</div>
+          <div class="manabar"><div id="playerMP" class="manafill" style="width:100%"></div></div>
+        </div>
+
+        <div class="wizard-card" id="enemyCard">
+          <div class="name">Oponente — Feiticeiro Selvagem</div>
+          <div class="small">Vida: <span id="enemyHPText">100</span>/100</div>
+          <div class="hpbar"><div id="enemyHP" class="hpfill" style="width:100%"></div></div>
+          <div class="small">Mana: <span id="enemyMPText">40</span>/40</div>
+          <div class="manabar"><div id="enemyMP" class="manafill" style="width:100%"></div></div>
+        </div>
+
+        <div class="wizard-card">
+          <div style="font-weight:700;margin-bottom:6px">Ações</div>
+          <div class="actions">
+            <button id="btnFire">Bola de Fogo<br><span class="small">(Dano 18, Mana 10)</span></button>
+            <button id="btnIce">Congelar<br><span class="small">(Dano 10 + lentidão, Mana 8)</span></button>
+            <button id="btnShield">Escudo<br><span class="small">(Reduz próximo dano, Mana 6)</span></button>
+            <button id="btnHeal">Curar<br><span class="small">(Cura 16, Mana 12)</span></button>
+            <button id="btnRecharge" class="secondary">Recuperar Mana<br><span class="small">(+12 Mana, sem alvo)</span></button>
+          </div>
+        </div>
+
+        <div class="wizard-card">
+          <div style="font-weight:700;margin-bottom:6px">Registro de combate</div>
+          <div class="log" id="log"></div>
+          <div class="footer">
+            <div class="small cooldown">Cooldowns: <span id="cds">—</span></div>
+            <button id="btnReset" class="secondary">Reiniciar</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    // --- Game state ---
+    const maxPlayer = {hp:100, mp:50};
+    const maxEnemy  = {hp:100, mp:40};
+    let player = {hp:100, mp:50, shield:0, slow:0};
+    let enemy  = {hp:100, mp:40, shield:0, slow:0};
+    let turn = 1; // odd: player, even: enemy
+    let logEl = document.getElementById('log');
+    let turnNumberEl = document.getElementById('turnNumber');
+    const stage = document.getElementById('stage');
+    const ctx = stage.getContext('2d');
+
+    // cooldowns: simple per-spell cooldown tracker
+    const cooldowns = {fire:0, ice:0, shield:0, heal:0};
+
+    // spell definitions
+    const spells = {
+      fire: {name:'Bola de Fogo', dmg:18, cost:10, cd:1},
+      ice:  {name:'Congelar', dmg:10, cost:8, cd:2, slow:1},
+      shield:{name:'Escudo', dmg:0, cost:6, cd:2, block:12},
+      heal:{name:'Curar', heal:16, cost:12, cd:3},
+      recharge:{name:'Recuperar Mana', cost:0}
+    };
+
+    // DOM refs
+    const refs = {
+      playerHP: document.getElementById('playerHP'),
+      playerHPText: document.getElementById('playerHPText'),
+      playerMP: document.getElementById('playerMP'),
+      playerMPText: document.getElementById('playerMPText'),
+      enemyHP: document.getElementById('enemyHP'),
+      enemyHPText: document.getElementById('enemyHPText'),
+      enemyMP: document.getElementById('enemyMP'),
+      enemyMPText: document.getElementById('enemyMPText'),
+      currentPlayer: document.getElementById('currentPlayer'),
+      cds: document.getElementById('cds'),
+      btnFire: document.getElementById('btnFire'),
+      btnIce: document.getElementById('btnIce'),
+      btnShield: document.getElementById('btnShield'),
+      btnHeal: document.getElementById('btnHeal'),
+      btnRecharge: document.getElementById('btnRecharge'),
+      btnReset: document.getElementById('btnReset')
+    };
+
+    // utilities
+    function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+    function rnd(min,max){return Math.floor(Math.random()*(max-min+1))+min}
+
+    function writeLog(text){
+      const time = new Date().toLocaleTimeString();
+      logEl.innerHTML = `<div>[${time}] ${text}</div>` + logEl.innerHTML;
+    }
+
+    function updateUI(){
+      refs.playerHPText.textContent = player.hp;
+      refs.playerMPText.textContent = player.mp;
+      refs.enemyHPText.textContent = enemy.hp;
+      refs.enemyMPText.textContent = enemy.mp;
+      refs.playerHP.style.width = (player.hp/maxPlayer.hp*100)+'%';
+      refs.playerMP.style.width = (player.mp/maxPlayer.mp*100)+'%';
+      refs.enemyHP.style.width = (enemy.hp/maxEnemy.hp*100)+'%';
+      refs.enemyMP.style.width = (enemy.mp/maxEnemy.mp*100)+'%';
+      turnNumberEl.textContent = turn;
+      refs.currentPlayer.textContent = (turn%2===1)?'Você':'Oponente';
+      refs.cds.textContent = `fire:${cooldowns.fire} ice:${cooldowns.ice} shield:${cooldowns.shield} heal:${cooldowns.heal}`;
+      // disable buttons when not player's turn or not enough mana or on cooldown
+      const playerTurn = (turn%2===1);
+      refs.btnFire.disabled = !playerTurn || player.mp < spells.fire.cost || cooldowns.fire>0;
+      refs.btnIce.disabled = !playerTurn || player.mp < spells.ice.cost || cooldowns.ice>0;
+      refs.btnShield.disabled = !playerTurn || player.mp < spells.shield.cost || cooldowns.shield>0;
+      refs.btnHeal.disabled = !playerTurn || player.mp < spells.heal.cost || cooldowns.heal>0;
+      refs.btnRecharge.disabled = !playerTurn;
+    }
+
+    function applyDamage(target, amount){
+      // shield reduces damage
+      let blocked = 0;
+      if(target.shield>0){
+        const used = Math.min(target.shield, amount);
+        blocked = used; target.shield -= used; amount -= used;
+      }
+      target.hp = clamp(target.hp - amount, 0, 9999);
+      return blocked;
+    }
+
+    // spell actions
+    function playerCast(spell){
+      if(turn%2===0) return; // not player's turn
+      if(spell.cost && player.mp < spell.cost) { writeLog('Mana insuficiente.'); return; }
+      if(spell===spells.fire && cooldowns.fire>0) { writeLog('Bola de Fogo em cooldown.'); return; }
+      // consume mana
+      player.mp = clamp(player.mp - (spell.cost||0), 0, maxPlayer.mp);
+      // set cooldown
+      if(spell.cd) {
+        if(spell===spells.fire) cooldowns.fire = spell.cd;
+        if(spell===spells.ice) cooldowns.ice = spell.cd;
+        if(spell===spells.shield) cooldowns.shield = spell.cd;
+        if(spell===spells.heal) cooldowns.heal = spell.cd;
+      }
+
+      // effects
+      if(spell===spells.fire){
+        const base = spell.dmg + rnd(-3,3);
+        const blocked = applyDamage(enemy, base);
+        writeLog(`Você lançou Bola de Fogo e causou ${base} dano. (${blocked} bloqueado)`);
+        spawnParticle('fire', 500, 160);
+      } else if(spell===spells.ice){
+        const base = spell.dmg + rnd(-2,2);
+        const blocked = applyDamage(enemy, base);
+        enemy.slow = (enemy.slow||0)+1;
+        writeLog(`Você lançou Congelar: ${base} dano e inimigo fica lento.`);
+        spawnParticle('ice', 500, 160);
+      } else if(spell===spells.shield){
+        player.shield = (player.shield||0) + spells.shield.block;
+        writeLog(`Você conjurou Escudo, bloqueando até ${spells.shield.block} dano.`);
+        spawnParticle('shield', 200, 80);
+      } else if(spell===spells.heal){
+        const amount = spell.heal + rnd(-2,2);
+        player.hp = clamp(player.hp + amount, 0, maxPlayer.hp);
+        writeLog(`Você usou Curar e recuperou ${amount} de vida.`);
+        spawnParticle('heal', 200, 80);
+      } else if(spell===spells.recharge){
+        player.mp = clamp(player.mp + 12, 0, maxPlayer.mp);
+        writeLog('Você recuperou 12 de mana.');
+      }
+
+      endTurn();
+      updateUI();
+      checkEnd();
+    }
+
+    function enemyAI(){
+      // simple decision: if low mana -> recharge, if low hp -> heal (if mp), else choose attack
+      const choices = [];
+      if(enemy.mp >= spells.fire.cost && cooldowns.fire===0) choices.push('fire');
+      if(enemy.mp >= spells.ice.cost && cooldowns.ice===0) choices.push('ice');
+      if(enemy.mp >= spells.shield.cost && cooldowns.shield===0) choices.push('shield');
+      if(enemy.mp >= spells.heal.cost && cooldowns.heal===0 && enemy.hp <= 60) choices.push('heal');
+      if(enemy.mp < 8) choices.push('recharge');
+      if(choices.length===0) choices.push('recharge');
+      // bias towards fire
+      const pick = choices[rnd(0,choices.length-1)];
+
+      // perform
+      if(pick==='fire'){
+        enemy.mp -= spells.fire.cost;
+        const base = spells.fire.dmg + rnd(-3,3);
+        const blocked = applyDamage(player, base);
+        writeLog(`Oponente lançou Bola de Fogo e causou ${base} dano. (${blocked} bloqueado)`);
+        spawnParticle('fire', 300, 200, true);
+        if(spells.fire.cd) cooldowns.fire = spells.fire.cd;
+      } else if(pick==='ice'){
+        enemy.mp -= spells.ice.cost;
+        const base = spells.ice.dmg + rnd(-2,2);
+        const blocked = applyDamage(player, base);
+        player.slow = (player.slow||0)+1;
+        writeLog(`Oponente lançou Congelar: ${base} dano e você fica lento.`);
+        spawnParticle('ice', 300, 200, true);
+        if(spells.ice.cd) cooldowns.ice = spells.ice.cd;
+      } else if(pick==='shield'){
+        enemy.mp -= spells.shield.cost;
+        enemy.shield = (enemy.shield||0) + spells.shield.block;
+        writeLog('Oponente conjurou Escudo.');
+        spawnParticle('shield', 180, 120, true);
+        if(spells.shield.cd) cooldowns.shield = spells.shield.cd;
+      } else if(pick==='heal'){
+        enemy.mp -= spells.heal.cost;
+        const amount = spells.heal.heal + rnd(-2,2);
+        enemy.hp = clamp(enemy.hp + amount, 0, maxEnemy.hp);
+        writeLog(`Oponente usou Curar e recuperou ${amount} de vida.`);
+        spawnParticle('heal', 220, 120, true);
+        if(spells.heal.cd) cooldowns.heal = spells.heal.cd;
+      } else if(pick==='recharge'){
+        enemy.mp = clamp(enemy.mp + 12, 0, maxEnemy.mp);
+        writeLog('Oponente recuperou 12 de mana.');
+      }
+
+      endTurn();
+      updateUI();
+      checkEnd();
+    }
+
+    function endTurn(){
+      // decrement cooldowns
+      for(const k in cooldowns) if(cooldowns[k]>0) cooldowns[k]--;
+      // reduce slow counters
+      if(player.slow>0) player.slow = Math.max(0, player.slow-1);
+      if(enemy.slow>0) enemy.slow = Math.max(0, enemy.slow-1);
+      // advance turn
+      turn++;
+      // if enemy turn, run AI after a short delay (faster when slowed)
+      if(turn%2===0){
+        const delay = 700 + (player.slow?300:0);
+        setTimeout(enemyAI, delay);
+      }
+    }
+
+    function checkEnd(){
+      if(player.hp<=0 || enemy.hp<=0){
+        const winner = (player.hp>0)?'Você venceu!':'Oponente venceu.';
+        writeLog(`Fim de jogo — ${winner}`);
+        // disable all actions
+        turn = 9999;
+        updateUI();
+      }
+    }
+
+    // --- canvas drawing & particles ---
+    const particles = [];
+    function spawnParticle(type, x, y, flip=false){
+      particles.push({type,x,y,life:40,flip});
+    }
+
+    function draw(){
+      ctx.clearRect(0,0,stage.width,stage.height);
+      // background
+      const g = ctx.createLinearGradient(0,0,0,stage.height);
+      g.addColorStop(0,'#071026'); g.addColorStop(1,'#04101a');
+      ctx.fillStyle = g; ctx.fillRect(0,0,stage.width,stage.height);
+
+      // draw wizards
+      // player left
+      drawWizard(120, stage.height/2, 'Você', player.hp/maxPlayer.hp);
+      // enemy right
+      drawWizard(stage.width-120, stage.height/2, 'Oponente', enemy.hp/maxEnemy.hp, true);
+
+      // particles
+      for(let i=particles.length-1;i>=0;i--){
+        const p = particles[i]; p.life--;
+        const alpha = p.life/40;
+        ctx.save(); ctx.globalAlpha = alpha;
+        if(p.type==='fire'){
+          ctx.beginPath(); ctx.fillStyle = `rgba(255,120,50,${alpha})`;
+          ctx.arc(p.x + (p.flip?-20:20) + rnd(-20,20), p.y + rnd(-20,20), 10 + Math.random()*12, 0, Math.PI*2); ctx.fill();
+        } else if(p.type==='ice'){
+          ctx.beginPath(); ctx.fillStyle = `rgba(160,220,255,${alpha})`;
+          ctx.rect(p.x + rnd(-10,10), p.y + rnd(-10,10), 8, 8); ctx.fill();
+        } else if(p.type==='shield'){
+          ctx.beginPath(); ctx.strokeStyle = `rgba(120,80,255,${alpha})`;
+          ctx.lineWidth = 4; ctx.arc(p.x, p.y, 36 - p.life/2, 0, Math.PI*2); ctx.stroke();
+        } else if(p.type==='heal'){
+          ctx.beginPath(); ctx.fillStyle = `rgba(120,255,180,${alpha})`;
+          ctx.arc(p.x + rnd(-8,8), p.y + rnd(-8,8), 6 + Math.random()*6, 0, Math.PI*2); ctx.fill();
+        }
+        ctx.restore();
+        if(p.life<=0) particles.splice(i,1);
+      }
+
+      requestAnimationFrame(draw);
+    }
+
+    function drawWizard(x,y,label,healthRatio, flip=false){
+      ctx.save();
+      // shadow
+      ctx.beginPath(); ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.ellipse(x,y+60,60,18,0,0,Math.PI*2); ctx.fill();
+      // cloak
+      ctx.beginPath(); ctx.fillStyle = flip? '#2b1b50':'#25406b'; ctx.ellipse(x,y,56,80,0,0,Math.PI*2); ctx.fill();
+      // face
+      ctx.beginPath(); ctx.fillStyle = '#f1d7b7'; ctx.arc(x, y-10, 18, 0, Math.PI*2); ctx.fill();
+      // eyes
+      ctx.beginPath(); ctx.fillStyle='#121212'; ctx.arc(x-6,y-14,3,0,Math.PI*2); ctx.arc(x+6,y-14,3,0,Math.PI*2); ctx.fill();
+      // staff
+      ctx.beginPath(); ctx.strokeStyle='#a17dff'; ctx.lineWidth=4; ctx.moveTo(x+30,y-40); ctx.lineTo(x+60,y-80); ctx.stroke();
+      // health orb
+      ctx.beginPath(); ctx.fillStyle='#ef4444'; ctx.arc(x-30,y+40,12,0,Math.PI*2); ctx.fill();
+      // health bar
+      ctx.fillStyle='rgba(255,255,255,0.06)'; ctx.fillRect(x-38,y+55,76,8);
+      ctx.fillStyle='linear-gradient(90deg,#ef4444,#f97316)'; ctx.fillRect(x-38,y+55,76*healthRatio,8);
+      // name
+      ctx.fillStyle='white'; ctx.font='14px Inter, sans-serif'; ctx.textAlign='center'; ctx.fillText(label, x, y+85);
+      ctx.restore();
+    }
+
+    // --- events ---
+    refs.btnFire.addEventListener('click',()=>playerCast(spells.fire));
+    refs.btnIce.addEventListener('click',()=>playerCast(spells.ice));
+    refs.btnShield.addEventListener('click',()=>playerCast(spells.shield));
+    refs.btnHeal.addEventListener('click',()=>playerCast(spells.heal));
+    refs.btnRecharge.addEventListener('click',()=>playerCast(spells.recharge));
+    refs.btnReset.addEventListener('click',()=>{
+      // reset full state
+      player = {hp:100, mp:50, shield:0, slow:0};
+      enemy  = {hp:100, mp:40, shield:0, slow:0};
+      for(const k in cooldowns) cooldowns[k]=0;
+      turn = 1; logEl.innerHTML=''; writeLog('Jogo reiniciado. Boa sorte!'); updateUI();
+    });
+
+    // initialize
+    writeLog('Bem-vindo à Batalha de Feiticeiros! Clique em uma ação para começar.');
+    updateUI();
+    draw();
+  </script>
+</body>
+</html>
